@@ -36,13 +36,27 @@ SIM_DT = 1.0 / FPS
 
 # Cabin Room Dimensions (2.0 m x 2.0 m @ 100 px/m)
 SCALE_PX_PER_M = 100.0
-ROOM_SIZE = 200.0       # 2.0 meters = 200 pixels
-ROOM_X0 = (WINDOW_WIDTH - ROOM_SIZE) / 2.0   # 350.0 px (Centered horizontally)
-ROOM_Y0 = (WINDOW_HEIGHT - ROOM_SIZE) / 2.0  # 250.0 px (Centered vertically)
 
-WHEEL_BASE = 20.0        # Distance between wheels (pixels)
-ROBOT_RADIUS = 10.0      # Visual & physical radius of robot body (10 cm radius = 20 cm diameter)
-SENSOR_MAX_RANGE = 200.0 # Max distance sensor range (pixels)
+# Real cabin size
+ROOM_SIZE = 200.0       # 2.0 m × 2.0 m in simulation coordinates
+
+# Display scale: enlarge the cabin visually
+DISPLAY_SCALE = 2.0
+
+# 400 × 400 pixels on screen
+DISPLAY_ROOM_SIZE = ROOM_SIZE * DISPLAY_SCALE
+
+# Center the enlarged cabin on the 900 × 700 window
+DISPLAY_ROOM_X0 = (WINDOW_WIDTH - DISPLAY_ROOM_SIZE) / 2
+DISPLAY_ROOM_Y0 = (WINDOW_HEIGHT - DISPLAY_ROOM_SIZE) / 2
+
+# Logical room coordinates remain 350–550 / 250–450
+ROOM_X0 = (WINDOW_WIDTH - ROOM_SIZE) / 2.0
+ROOM_Y0 = (WINDOW_HEIGHT - ROOM_SIZE) / 2.0
+
+WHEEL_BASE = 20.0
+ROBOT_RADIUS = 10.0
+SENSOR_MAX_RANGE = 200.0
 
 
 MODE_MANUAL = 1
@@ -433,105 +447,165 @@ class RobotSimulation:
                 self.trail.pop(0)
 
     def draw(self):
-        # 1. Ambient Background Outside Cabin
+        # ---------------------------------------------------------------
+        # Visual scale mapping
+        # Logic:  100 px = 1 m  (physics / collision coordinate space)
+        # Visual: 200 px = 1 m  → VISUAL_SCALE = 2.0
+        #         2.0 m room   → 400 x 400 px displayed on screen
+        # HUD_HEIGHT: 60 px reserved at the very top of the 900x700 window.
+        # Remaining usable height: 640 px → cabin visual center at y = 60 + 320 = 380
+        # Cabin visual center horizontally at x = 900/2 = 450
+        # ---------------------------------------------------------------
+        VISUAL_SCALE = 2.0
+        HUD_HEIGHT   = 60          # px reserved for the top HUD bar
+        ROOM_CX = ROOM_X0 + ROOM_SIZE / 2.0   # logical center of room
+        ROOM_CY = ROOM_Y0 + ROOM_SIZE / 2.0
+        WIN_CX  = WINDOW_WIDTH  / 2.0                               # 450 px
+        WIN_CY  = HUD_HEIGHT + (WINDOW_HEIGHT - HUD_HEIGHT) / 2.0  # 380 px
+
+        # Helper: map a logical coordinate → screen pixel
+        def s_x(lx): return WIN_CX + (lx - ROOM_CX) * VISUAL_SCALE
+        def s_y(ly): return WIN_CY + (ly - ROOM_CY) * VISUAL_SCALE
+        def s_r(lr): return max(1, int(lr * VISUAL_SCALE))
+        def s_rect(rect):
+            return pygame.Rect(
+                int(s_x(rect.left)), int(s_y(rect.top)),
+                int(s_r(rect.width)), int(s_r(rect.height)))
+
+        def sc(surface, color, lx, ly, lr, width=0):
+            """Scaled circle draw."""
+            pygame.draw.circle(surface, color,
+                               (int(s_x(lx)), int(s_y(ly))), s_r(lr), width)
+
+        def sl(surface, color, lp1, lp2, width=1):
+            """Scaled line draw."""
+            pygame.draw.line(surface, color,
+                             (int(s_x(lp1[0])), int(s_y(lp1[1]))),
+                             (int(s_x(lp2[0])), int(s_y(lp2[1]))), width)
+
+        # 1. Dark background outside cabin
         self.screen.fill((18, 22, 28))
 
-        # 2. Cabin Room Floor (2.0 m x 2.0 m @ 100 px/m)
-        room_rect = pygame.Rect(int(ROOM_X0), int(ROOM_Y0), int(ROOM_SIZE), int(ROOM_SIZE))
-        pygame.draw.rect(self.screen, (45, 38, 32), room_rect) # Warm wooden floor base
+        # 2. Cabin floor (warm wood tone)
+        room_vis = s_rect(pygame.Rect(ROOM_X0, ROOM_Y0, ROOM_SIZE, ROOM_SIZE))
+        pygame.draw.rect(self.screen, (52, 42, 34), room_vis)
 
-        # Cabin Floor Grid (0.5 m = 50 px grid)
+        # Floor planks — horizontal lines every 25 px logic (25 cm)
+        for gy in range(int(ROOM_Y0), int(ROOM_Y0 + ROOM_SIZE) + 1, 25):
+            sl(self.screen, (66, 54, 44), (ROOM_X0, gy), (ROOM_X0 + ROOM_SIZE, gy), 1)
+        # Faint vertical grain every 50 px logic (50 cm)
         for gx in range(int(ROOM_X0), int(ROOM_X0 + ROOM_SIZE) + 1, 50):
-            pygame.draw.line(self.screen, (58, 48, 40), (gx, int(ROOM_Y0)), (gx, int(ROOM_Y0 + ROOM_SIZE)), 1)
-        for gy in range(int(ROOM_Y0), int(ROOM_Y0 + ROOM_SIZE) + 1, 50):
-            pygame.draw.line(self.screen, (58, 48, 40), (int(ROOM_X0), gy), (int(ROOM_X0 + ROOM_SIZE), gy), 1)
+            sl(self.screen, (60, 49, 40), (gx, ROOM_Y0), (gx, ROOM_Y0 + ROOM_SIZE), 1)
 
-        # 3. Cabin Wall Boundaries (Thick wooden border)
-        pygame.draw.rect(self.screen, (180, 130, 80), room_rect, 8)
-        pygame.draw.rect(self.screen, (220, 170, 120), room_rect, 2)
+        # 3. Cabin walls (thick border + highlight)
+        pygame.draw.rect(self.screen, (160, 110, 60), room_vis, 10)   # thick wall
+        pygame.draw.rect(self.screen, (210, 160, 100), room_vis, 2)   # inner highlight
+        pygame.draw.rect(self.screen, (100, 70, 35), room_vis, 1)     # outer shadow
 
-        # 4. Trail (Robot path / coverage visualization)
+        # Room label (top-left corner inside cabin)
+        lbl = self.font_small.render("2.0 m", True, (160, 130, 80))
+        self.screen.blit(lbl, (room_vis.left + 4, room_vis.top + 4))
+
+        # 4. Robot trail
         if len(self.trail) > 1:
-            trail_color = (60, 200, 180) if self.mode == MODE_AUTOMATIC else (60, 130, 180)
-            pygame.draw.lines(self.screen, trail_color, False, self.trail, 2)
+            trail_color = (60, 200, 180) if self.mode == MODE_AUTOMATIC else (60, 130, 200)
+            scaled_trail = [(int(s_x(tx)), int(s_y(ty))) for tx, ty in self.trail]
+            pygame.draw.lines(self.screen, trail_color, False, scaled_trail, 2)
 
-        # 5. Furniture Visual Rendering (Table Top & Chair Seats)
-        # Chair 1 Seat (Top side)
-        pygame.draw.rect(self.screen, (50, 110, 170), self.chair1_rect, border_radius=3)
-        pygame.draw.rect(self.screen, (90, 160, 220), self.chair1_rect, 1, border_radius=3)
-        pygame.draw.line(self.screen, (120, 190, 240), (self.chair1_rect.left, self.chair1_rect.top), (self.chair1_rect.right, self.chair1_rect.top), 3)
+        # 5. Furniture
+        # --- Chair 1 (top side — backrest strip at top edge)
+        v_c1 = s_rect(self.chair1_rect)
+        pygame.draw.rect(self.screen, (45, 100, 160), v_c1, border_radius=4)
+        pygame.draw.rect(self.screen, (80, 150, 210), v_c1, 2, border_radius=4)
+        pygame.draw.line(self.screen, (130, 200, 255),
+                         (v_c1.left + 3, v_c1.top + 3),
+                         (v_c1.right - 3, v_c1.top + 3), 4)  # backrest bar
 
-        # Chair 2 Seat (Bottom side, left)
-        pygame.draw.rect(self.screen, (50, 110, 170), self.chair2_rect, border_radius=3)
-        pygame.draw.rect(self.screen, (90, 160, 220), self.chair2_rect, 1, border_radius=3)
-        pygame.draw.line(self.screen, (120, 190, 240), (self.chair2_rect.left, self.chair2_rect.bottom), (self.chair2_rect.right, self.chair2_rect.bottom), 3)
+        # --- Chair 2 (bottom-left — backrest strip at bottom edge)
+        v_c2 = s_rect(self.chair2_rect)
+        pygame.draw.rect(self.screen, (45, 100, 160), v_c2, border_radius=4)
+        pygame.draw.rect(self.screen, (80, 150, 210), v_c2, 2, border_radius=4)
+        pygame.draw.line(self.screen, (130, 200, 255),
+                         (v_c2.left + 3, v_c2.bottom - 3),
+                         (v_c2.right - 3, v_c2.bottom - 3), 4)
 
-        # Chair 3 Seat (Bottom side, right)
-        pygame.draw.rect(self.screen, (50, 110, 170), self.chair3_rect, border_radius=3)
-        pygame.draw.rect(self.screen, (90, 160, 220), self.chair3_rect, 1, border_radius=3)
-        pygame.draw.line(self.screen, (120, 190, 240), (self.chair3_rect.left, self.chair3_rect.bottom), (self.chair3_rect.right, self.chair3_rect.bottom), 3)
+        # --- Chair 3 (bottom-right — backrest strip at bottom edge)
+        v_c3 = s_rect(self.chair3_rect)
+        pygame.draw.rect(self.screen, (45, 100, 160), v_c3, border_radius=4)
+        pygame.draw.rect(self.screen, (80, 150, 210), v_c3, 2, border_radius=4)
+        pygame.draw.line(self.screen, (130, 200, 255),
+                         (v_c3.left + 3, v_c3.bottom - 3),
+                         (v_c3.right - 3, v_c3.bottom - 3), 4)
 
-        # Table Top (Center)
-        pygame.draw.rect(self.screen, (150, 85, 40), self.table_rect, border_radius=4)
-        pygame.draw.rect(self.screen, (210, 140, 70), self.table_rect, 2, border_radius=4)
+        # --- Table top (warm brown, centered)
+        v_tbl = s_rect(self.table_rect)
+        pygame.draw.rect(self.screen, (140, 80, 35), v_tbl, border_radius=5)
+        pygame.draw.rect(self.screen, (200, 130, 60), v_tbl, 2, border_radius=5)
+        # subtle wood grain on table
+        for gi in range(3):
+            gy_tbl = v_tbl.top + v_tbl.height * (gi + 1) // 4
+            pygame.draw.line(self.screen, (155, 95, 45),
+                             (v_tbl.left + 4, gy_tbl),
+                             (v_tbl.right - 4, gy_tbl), 1)
 
-        # 6. Physical Leg Obstacles (Table and Chair Legs rendered distinctly)
+        # 6. Leg obstacles
         for ox, oy, r in self.obstacles:
-            pygame.draw.circle(self.screen, (230, 70, 70), (int(ox), int(oy)), int(max(2, r + 1)))
-            pygame.draw.circle(self.screen, (255, 160, 160), (int(ox), int(oy)), 1)
-            pygame.draw.circle(self.screen, (140, 30, 30), (int(ox), int(oy)), int(max(2, r + 1)), 1)
+            sc(self.screen, (200, 55, 55), ox, oy, r + 1)        # dark red fill
+            sc(self.screen, (240, 110, 110), ox, oy, r + 1, 1)   # bright red ring
 
-        # 7. Target Waypoint (Active in Mode 3)
+        # 7. Target waypoint (Mode 3)
         if self.mode == MODE_DESTINATION:
             pulse = 4 * math.sin(time.time() * 6.0)
-            pygame.draw.circle(self.screen, (255, 180, 50), (int(self.target_x), int(self.target_y)), int(10 + pulse), 2)
-            pygame.draw.circle(self.screen, (255, 200, 80), (int(self.target_x), int(self.target_y)), 3)
+            sc(self.screen, (255, 180, 50), self.target_x, self.target_y, 10 + pulse, 2)
+            sc(self.screen, (255, 210, 80), self.target_x, self.target_y, 3)
 
-        # 8. Distance Sensor Ray
+        # 8. Forward sensor ray
         sensor_end_x = self.x + self.front_dist * math.cos(self.theta)
         sensor_end_y = self.y + self.front_dist * math.sin(self.theta)
-        pygame.draw.line(self.screen, (240, 70, 70), (int(self.x), int(self.y)), (int(sensor_end_x), int(sensor_end_y)), 1)
-        pygame.draw.circle(self.screen, (255, 50, 50), (int(sensor_end_x), int(sensor_end_y)), 3)
+        sl(self.screen, (200, 55, 55),
+           (self.x, self.y), (sensor_end_x, sensor_end_y), 1)
+        sc(self.screen, (255, 60, 60), sensor_end_x, sensor_end_y, 2)
 
-        # 9. Robot Body (Cleaning Robot Chassis)
-        rx, ry = int(self.x), int(self.y)
-        pygame.draw.circle(self.screen, (30, 40, 55), (rx, ry), int(ROBOT_RADIUS))
-        pygame.draw.circle(self.screen, (40, 160, 220), (rx, ry), int(ROBOT_RADIUS - 2))
-        pygame.draw.circle(self.screen, (200, 240, 255), (rx, ry), int(ROBOT_RADIUS), 2)
+        # 9. Robot body
+        sc(self.screen, (25, 35, 50), self.x, self.y, ROBOT_RADIUS)          # shadow
+        sc(self.screen, (35, 150, 215), self.x, self.y, ROBOT_RADIUS - 1)    # body fill
+        sc(self.screen, (190, 235, 255), self.x, self.y, ROBOT_RADIUS, 2)    # rim
 
-        # Front Bumper Bar (tactile bumper arc)
+        # Front bumper arc
         b_ang = 0.75
-        p_left = (rx + ROBOT_RADIUS * math.cos(self.theta - b_ang),
-                  ry + ROBOT_RADIUS * math.sin(self.theta - b_ang))
-        p_front = (rx + (ROBOT_RADIUS + 3) * math.cos(self.theta),
-                   ry + (ROBOT_RADIUS + 3) * math.sin(self.theta))
-        p_right = (rx + ROBOT_RADIUS * math.cos(self.theta + b_ang),
-                   ry + ROBOT_RADIUS * math.sin(self.theta + b_ang))
-        pygame.draw.lines(self.screen, (240, 70, 70), False, [p_left, p_front, p_right], 2)
+        p_left  = (self.x + ROBOT_RADIUS * math.cos(self.theta - b_ang),
+                   self.y + ROBOT_RADIUS * math.sin(self.theta - b_ang))
+        p_front = (self.x + (ROBOT_RADIUS + 1.5) * math.cos(self.theta),
+                   self.y + (ROBOT_RADIUS + 1.5) * math.sin(self.theta))
+        p_right = (self.x + ROBOT_RADIUS * math.cos(self.theta + b_ang),
+                   self.y + ROBOT_RADIUS * math.sin(self.theta + b_ang))
+        scaled_bumper = [(int(s_x(px)), int(s_y(py)))
+                         for px, py in [p_left, p_front, p_right]]
+        pygame.draw.lines(self.screen, (230, 60, 60), False, scaled_bumper, 2)
 
-        # Center Vacuum Suction Vortex
-        vac_color = (0, 240, 255) if self.client.is_vacuum_on else (90, 100, 110)
-        pygame.draw.circle(self.screen, vac_color, (rx, ry), 5)
+        # Vacuum vortex indicator
+        vac_color = (0, 230, 255) if self.client.is_vacuum_on else (80, 90, 100)
+        sc(self.screen, vac_color, self.x, self.y, 4)
         if self.client.is_vacuum_on:
-            pygame.draw.circle(self.screen, (255, 255, 255), (rx, ry), 2)
+            sc(self.screen, (255, 255, 255), self.x, self.y, 1)
 
-        # Spinning Side Sweeper Brush
+        # Spinning side sweeper brush
         brush_base_ang = self.theta + 0.65
-        bx = rx + (ROBOT_RADIUS - 3) * math.cos(brush_base_ang)
-        by = ry + (ROBOT_RADIUS - 3) * math.sin(brush_base_ang)
+        bx_l = self.x + (ROBOT_RADIUS - 2) * math.cos(brush_base_ang)
+        by_l = self.y + (ROBOT_RADIUS - 2) * math.sin(brush_base_ang)
         spin = (time.time() * 14.0) % (2.0 * math.pi) if self.client.is_vacuum_on else 0.0
         for b_sub in [spin, spin + 2.094, spin + 4.188]:
-            br_end_x = bx + 6 * math.cos(b_sub)
-            br_end_y = by + 6 * math.sin(b_sub)
-            pygame.draw.line(self.screen, (255, 220, 70), (bx, by), (br_end_x, br_end_y), 2)
+            br_end_x = bx_l + 5 * math.cos(b_sub)
+            br_end_y = by_l + 5 * math.sin(b_sub)
+            sl(self.screen, (255, 215, 60), (bx_l, by_l), (br_end_x, br_end_y), 2)
 
-        # Differential Drive Wheels
-        perp = self.theta + math.pi / 2.0
+        # Differential drive wheels
+        perp     = self.theta + math.pi / 2.0
         w_offset = WHEEL_BASE / 2.0
         for side in [-1, 1]:
             wx = self.x + side * w_offset * math.cos(perp)
             wy = self.y + side * w_offset * math.sin(perp)
-            w_len, w_th = 10, 4
+            w_len, w_th = 8, 3
             p1 = (wx - (w_len/2)*math.cos(self.theta) - (w_th/2)*math.sin(self.theta),
                   wy - (w_len/2)*math.sin(self.theta) + (w_th/2)*math.cos(self.theta))
             p2 = (wx + (w_len/2)*math.cos(self.theta) - (w_th/2)*math.sin(self.theta),
@@ -540,63 +614,72 @@ class RobotSimulation:
                   wy + (w_len/2)*math.sin(self.theta) - (w_th/2)*math.cos(self.theta))
             p4 = (wx - (w_len/2)*math.cos(self.theta) + (w_th/2)*math.sin(self.theta),
                   wy - (w_len/2)*math.sin(self.theta) - (w_th/2)*math.cos(self.theta))
-            pygame.draw.polygon(self.screen, (20, 20, 20), [p1, p2, p3, p4])
-            pygame.draw.polygon(self.screen, (100, 100, 100), [p1, p2, p3, p4], 1)
+            scaled_wheel = [(int(s_x(px)), int(s_y(py)))
+                            for px, py in [p1, p2, p3, p4]]
+            pygame.draw.polygon(self.screen, (18, 18, 18), scaled_wheel)
+            pygame.draw.polygon(self.screen, (90, 90, 90), scaled_wheel, 1)
 
-        # Heading Indicator Line
-        head_x = self.x + (ROBOT_RADIUS + 6) * math.cos(self.theta)
-        head_y = self.y + (ROBOT_RADIUS + 6) * math.sin(self.theta)
-        pygame.draw.line(self.screen, (255, 255, 100), (rx, ry), (int(head_x), int(head_y)), 2)
+        # Heading indicator
+        head_x = self.x + (ROBOT_RADIUS + 4) * math.cos(self.theta)
+        head_y = self.y + (ROBOT_RADIUS + 4) * math.sin(self.theta)
+        sl(self.screen, (255, 255, 80), (self.x, self.y), (head_x, head_y), 2)
 
-        # 10. Status HUD Overlay
+        # 10. HUD (top bar, never overlaps cabin)
         self._render_hud()
 
         pygame.display.flip()
 
     def _render_hud(self):
-        panel_rect = pygame.Rect(15, 15, 380, 235)
-        panel_surface = pygame.Surface((panel_rect.width, panel_rect.height), pygame.SRCALPHA)
-        panel_surface.fill((10, 15, 22, 235))
-        self.screen.blit(panel_surface, panel_rect.topleft)
-        pygame.draw.rect(self.screen, (60, 80, 100), panel_rect, 1, border_radius=6)
+        # HUD occupies a 58 px horizontal strip at the very top of the window.
+        HUD_H = 58
+        hud_surf = pygame.Surface((WINDOW_WIDTH, HUD_H), pygame.SRCALPHA)
+        hud_surf.fill((10, 15, 22, 245))
+        self.screen.blit(hud_surf, (0, 0))
+        pygame.draw.line(self.screen, (55, 75, 105),
+                         (0, HUD_H - 1), (WINDOW_WIDTH, HUD_H - 1), 1)
 
-        # Status badge color
         badge_color = (80, 220, 100) if not self.client.is_mock else (240, 160, 40)
-        vac_txt = "ACTIVE (Suction + Brush ON)" if self.client.is_vacuum_on else "OFF (Idle/Docked)"
-        vac_color = (0, 240, 255) if self.client.is_vacuum_on else (160, 160, 160)
-
-        mode_titles = {
-            MODE_MANUAL: "MODE 1: MANUAL MODE (WASD)",
-            MODE_AUTOMATIC: "MODE 2: AUTOMATIC MODE (Room Discovery)",
-            MODE_DESTINATION: "MODE 3: DESTINATION MODE (Waypoint PID)"
+        mode_labels = {
+            MODE_MANUAL:      "MANUAL (WASD)",
+            MODE_AUTOMATIC:   "AUTO (Room Discovery)",
+            MODE_DESTINATION: "DESTINATION (Waypoint PID)",
         }
         mode_colors = {
-            MODE_MANUAL: (0, 230, 255),
-            MODE_AUTOMATIC: (100, 255, 120),
-            MODE_DESTINATION: (255, 180, 50)
+            MODE_MANUAL:      (0, 230, 255),
+            MODE_AUTOMATIC:   (100, 255, 120),
+            MODE_DESTINATION: (255, 180, 50),
         }
 
-        # Cabin relative coordinates (0 to 2.0 m)
         rel_x_m = (self.x - ROOM_X0) / SCALE_PX_PER_M
         rel_y_m = (self.y - ROOM_Y0) / SCALE_PX_PER_M
 
-        lines = [
-            ("2.0m x 2.0m CABIN ROBOT SIMULATOR", (255, 255, 255), self.font_title),
-            (mode_titles[self.mode], mode_colors[self.mode], self.font_bold),
-            (f"Status: {self.client.status_msg}", badge_color, self.font_bold),
-            (f"Environment: 2.0m x 2.0m Cabin (100 px = 1 m)", (220, 220, 180), self.font_small),
-            (f"Robot Cabin Pose: X={rel_x_m:.2f}m, Y={rel_y_m:.2f}m, Th={math.degrees(self.theta):.1f}°", (200, 220, 240), self.font_small),
-            (f"Front Sensor   : {self.front_dist:.1f} px ({self.front_dist/SCALE_PX_PER_M:.2f} m)", (250, 140, 140), self.font_small),
-            (f"Motor Cmds (L/R): {self.v_l:.1f} / {self.v_r:.1f}", (140, 240, 160), self.font_bold),
-            ("Modes: Press [1] Manual | [2] Auto | [3] Destination", (255, 255, 180), self.font_bold),
-            ("Manual Mode: Use W A S D keys to drive robot", (160, 200, 240), self.font_small),
-        ]
+        # --- Row 1: Title | Mode | Status (right-aligned)
+        title_s  = self.font_title.render("2m×2m CABIN ROBOT SIM",    True, (255, 255, 255))
+        mode_s   = self.font_bold.render(
+            f"[{mode_labels[self.mode]}]", True, mode_colors[self.mode])
+        status_s = self.font_bold.render(self.client.status_msg, True, badge_color)
 
-        y_offset = 18
-        for text, color, font in lines:
-            rendered = font.render(text, True, color)
-            self.screen.blit(rendered, (25, y_offset))
-            y_offset += rendered.get_height() + 2
+        self.screen.blit(title_s,  (10,  5))
+        self.screen.blit(mode_s,   (10 + title_s.get_width() + 14, 5))
+        self.screen.blit(status_s, (WINDOW_WIDTH - status_s.get_width() - 10, 5))
+
+        # --- Row 2: Pose | Sensor | Motors | Controls hint
+        pose_s = self.font_small.render(
+            f"Pose  X={rel_x_m:.2f}m  Y={rel_y_m:.2f}m  θ={math.degrees(self.theta):.1f}°",
+            True, (200, 220, 240))
+        sens_s = self.font_small.render(
+            f"Sensor {self.front_dist / SCALE_PX_PER_M:.2f} m",
+            True, (250, 140, 140))
+        mot_s  = self.font_small.render(
+            f"Motors  L={self.v_l:.0f}  R={self.v_r:.0f}",
+            True, (140, 240, 160))
+        hint_s = self.font_small.render(
+            "[1] Manual  [2] Auto  [3] Dest  |  WASD drive  |  R reset",
+            True, (200, 200, 130))
+
+        row2_y = 33
+        for surf, col_x in zip([pose_s, sens_s, mot_s, hint_s], [10, 285, 445, 592]):
+            self.screen.blit(surf, (col_x, row2_y))
 
     def run(self, max_seconds: Optional[float] = None):
         start_time = time.time()
