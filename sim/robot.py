@@ -28,15 +28,21 @@ except ImportError:
     SERIAL_AVAILABLE = False
 
 
-# Simulation Constants
+# Simulation Constants & Cabin Room Definitions
 WINDOW_WIDTH = 900
 WINDOW_HEIGHT = 700
 FPS = 60
 SIM_DT = 1.0 / FPS
 
-WHEEL_BASE = 40.0       # Distance between wheels (pixels)
-ROBOT_RADIUS = 25.0     # Visual radius of robot body
-SENSOR_MAX_RANGE = 250.0  # Max distance sensor range
+# Cabin Room Dimensions (2.0 m x 2.0 m @ 100 px/m)
+SCALE_PX_PER_M = 100.0
+ROOM_SIZE = 200.0       # 2.0 meters = 200 pixels
+ROOM_X0 = (WINDOW_WIDTH - ROOM_SIZE) / 2.0   # 350.0 px (Centered horizontally)
+ROOM_Y0 = (WINDOW_HEIGHT - ROOM_SIZE) / 2.0  # 250.0 px (Centered vertically)
+
+WHEEL_BASE = 20.0        # Distance between wheels (pixels)
+ROBOT_RADIUS = 10.0      # Visual & physical radius of robot body (10 cm radius = 20 cm diameter)
+SENSOR_MAX_RANGE = 200.0 # Max distance sensor range (pixels)
 
 
 MODE_MANUAL = 1
@@ -52,7 +58,7 @@ class MockESP32Controller:
         self.max_speed = 120.0
         self.kp = 80.0
         self.kd = 10.0
-        self.waypoint_tolerance = 15.0
+        self.waypoint_tolerance = 12.0
         self.is_vacuum_on = True
         self.battery_pct = 95
         self.mode = MODE_MANUAL
@@ -64,12 +70,12 @@ class MockESP32Controller:
             return man_l, man_r
 
         elif mode == MODE_AUTOMATIC:
-            # Room Discovery / Autonomous Exploration Mode
+            # Room Discovery / Autonomous Exploration Mode inside 2m x 2m cabin
             # Turn away when close to walls or obstacles, otherwise sweep forward
-            if 0.0 < dist_front < 60.0 or x < 35 or x > WINDOW_WIDTH - 35 or y < 35 or y > WINDOW_HEIGHT - 35:
+            if 0.0 < dist_front < 40.0 or x < ROOM_X0 + 20 or x > ROOM_X0 + ROOM_SIZE - 20 or y < ROOM_Y0 + 20 or y > ROOM_Y0 + ROOM_SIZE - 20:
                 return -30.0, 60.0  # Pivot turn to discover unexplored room direction
             else:
-                return 85.0, 85.0   # Drive forward mapping/discovering room
+                return 80.0, 80.0   # Drive forward mapping/discovering room
 
         elif mode == MODE_DESTINATION:
             dx = tgt_x - x
@@ -89,7 +95,7 @@ class MockESP32Controller:
             if dist <= self.waypoint_tolerance:
                 return 0.0, 0.0
 
-            if 0.0 < dist_front < 60.0:
+            if 0.0 < dist_front < 40.0:
                 # Obstacle avoidance reflex
                 return -20.0, 60.0
 
@@ -98,8 +104,8 @@ class MockESP32Controller:
 
             if alignment > 0.0:
                 linear_speed = self.max_speed * alignment
-                if dist < 80.0:
-                    linear_speed *= (dist / 80.0)
+                if dist < 60.0:
+                    linear_speed *= (dist / 60.0)
             else:
                 linear_speed = 0.0
 
@@ -242,19 +248,61 @@ class RobotSimulation:
         self.client = client
         self.headless = headless
 
-        # Robot State & Mode
+        # Robot State & Mode (Starting in top-left open area of 2m x 2m cabin)
         self.mode = MODE_MANUAL  # Default to Mode 1 (Manual Mode)
-        self.x = 200.0
-        self.y = 350.0
+        self.x = ROOM_X0 + 35.0  # 385.0 px (0.35 m from left wall)
+        self.y = ROOM_Y0 + 35.0  # 285.0 px (0.35 m from top wall)
         self.theta = 0.0
         self.v_l = 0.0
         self.v_r = 0.0
 
-        # Waypoint & Obstacles
-        self.target_x = 700.0
-        self.target_y = 350.0
+        # Waypoint & Obstacles inside Cabin
+        self.target_x = ROOM_X0 + 160.0 # 510.0 px (bottom-right open area)
+        self.target_y = ROOM_Y0 + 160.0 # 410.0 px
+
+        # -------------------------------------------------------------
+        # Furniture Geometry (2.0 m x 2.0 m Cabin Layout @ 100 px/m)
+        # Room Center = (ROOM_X0 + 100, ROOM_Y0 + 100) = (450, 350)
+        # -------------------------------------------------------------
+        cx = ROOM_X0 + 100.0
+        cy = ROOM_Y0 + 100.0
+
+        # Table: 50 cm x 30 cm centered at (cx, cy)
+        self.table_rect = pygame.Rect(cx - 25, cy - 15, 50, 30)
+
+        # 3 Chairs: 1 Chair on Top, 2 Chairs on Bottom (Opposite side)
+        # Chair 1 (Top side)
+        self.chair1_rect = pygame.Rect(cx - 8, cy - 35, 16, 16)
+        # Chair 2 (Bottom side, left)
+        self.chair2_rect = pygame.Rect(cx - 23, cy + 19, 16, 16)
+        # Chair 3 (Bottom side, right)
+        self.chair3_rect = pygame.Rect(cx + 7, cy + 19, 16, 16)
+
+        # Leg Obstacles (Table and Chair Legs represented as circular physical obstacles)
         self.obstacles: List[Tuple[float, float, float]] = [
-            (450.0, 350.0, 35.0), # (x, y, radius)
+            # 4 Table Legs (Radius 2.5 px)
+            (cx - 20.0, cy - 10.0, 2.5),
+            (cx + 20.0, cy - 10.0, 2.5),
+            (cx - 20.0, cy + 10.0, 2.5),
+            (cx + 20.0, cy + 10.0, 2.5),
+
+            # Chair 1 Legs (Top chair, 4 legs)
+            (cx - 6.0, cy - 33.0, 2.0),
+            (cx + 6.0, cy - 33.0, 2.0),
+            (cx - 6.0, cy - 21.0, 2.0),
+            (cx + 6.0, cy - 21.0, 2.0),
+
+            # Chair 2 Legs (Bottom left chair, 4 legs)
+            (cx - 21.0, cy + 21.0, 2.0),
+            (cx - 9.0,  cy + 21.0, 2.0),
+            (cx - 21.0, cy + 33.0, 2.0),
+            (cx - 9.0,  cy + 33.0, 2.0),
+
+            # Chair 3 Legs (Bottom right chair, 4 legs)
+            (cx + 9.0,  cy + 21.0, 2.0),
+            (cx + 21.0, cy + 21.0, 2.0),
+            (cx + 9.0,  cy + 33.0, 2.0),
+            (cx + 21.0, cy + 33.0, 2.0),
         ]
 
         self.trail: List[Tuple[float, float]] = []
@@ -264,31 +312,31 @@ class RobotSimulation:
         # Pygame setup
         if not self.headless:
             pygame.init()
-            pygame.display.set_caption("ESP32 Hardware-in-the-Loop Simulation - 3-Mode Robot Controller")
-            self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+            pygame.display.set_caption("ESP32 HIL Simulation - 2m x 2m Cabin Environment")
+            self.screen = pygame.display.set_mode((int(WINDOW_WIDTH), int(WINDOW_HEIGHT)))
             self.clock = pygame.time.Clock()
             self.font_small = pygame.font.Font(None, 18)
             self.font_bold = pygame.font.Font(None, 20)
             self.font_title = pygame.font.Font(None, 24)
 
     def cast_distance_sensor(self) -> float:
-        """Raycast forward along robot heading to measure distance to boundaries or obstacles."""
+        """Raycast forward along robot heading to measure distance to cabin walls or leg obstacles."""
         sensor_dist = SENSOR_MAX_RANGE
         cos_t = math.cos(self.theta)
         sin_t = math.sin(self.theta)
 
-        # 1. Screen boundaries
+        # 1. Raycast against 4 Cabin Walls
         if cos_t > 0:
-            sensor_dist = min(sensor_dist, (WINDOW_WIDTH - self.x) / cos_t)
+            sensor_dist = min(sensor_dist, ((ROOM_X0 + ROOM_SIZE) - self.x) / cos_t)
         elif cos_t < 0:
-            sensor_dist = min(sensor_dist, -self.x / cos_t)
+            sensor_dist = min(sensor_dist, (ROOM_X0 - self.x) / cos_t)
 
         if sin_t > 0:
-            sensor_dist = min(sensor_dist, (WINDOW_HEIGHT - self.y) / sin_t)
+            sensor_dist = min(sensor_dist, ((ROOM_Y0 + ROOM_SIZE) - self.y) / sin_t)
         elif sin_t < 0:
-            sensor_dist = min(sensor_dist, -self.y / sin_t)
+            sensor_dist = min(sensor_dist, (ROOM_Y0 - self.y) / sin_t)
 
-        # 2. Obstacles (circle intersection)
+        # 2. Raycast against Furniture Leg Obstacles (circle intersection)
         for ox, oy, r in self.obstacles:
             dx = ox - self.x
             dy = oy - self.y
@@ -363,9 +411,20 @@ class RobotSimulation:
         while self.theta < -math.pi:
             self.theta += 2.0 * math.pi
 
-        # Keep within boundaries
-        self.x = max(ROBOT_RADIUS, min(WINDOW_WIDTH - ROBOT_RADIUS, self.x))
-        self.y = max(ROBOT_RADIUS, min(WINDOW_HEIGHT - ROBOT_RADIUS, self.y))
+        # 1. Cabin Wall Position Clamping
+        self.x = max(ROOM_X0 + ROBOT_RADIUS, min(ROOM_X0 + ROOM_SIZE - ROBOT_RADIUS, self.x))
+        self.y = max(ROOM_Y0 + ROBOT_RADIUS, min(ROOM_Y0 + ROOM_SIZE - ROBOT_RADIUS, self.y))
+
+        # 2. Furniture Leg Obstacle Physical Collision Resolution
+        for ox, oy, r in self.obstacles:
+            dx = self.x - ox
+            dy = self.y - oy
+            dist = math.hypot(dx, dy)
+            min_dist = r + ROBOT_RADIUS
+            if 0 < dist < min_dist:
+                overlap = min_dist - dist
+                self.x += (dx / dist) * overlap
+                self.y += (dy / dist) * overlap
 
         # Update trail
         if not self.trail or math.hypot(self.x - self.trail[-1][0], self.y - self.trail[-1][1]) > 4.0:
@@ -374,81 +433,105 @@ class RobotSimulation:
                 self.trail.pop(0)
 
     def draw(self):
-        self.screen.fill((20, 24, 30))  # Dark slate background
+        # 1. Ambient Background Outside Cabin
+        self.screen.fill((18, 22, 28))
 
-        # 1. Grid lines
-        for gx in range(0, WINDOW_WIDTH, 50):
-            pygame.draw.line(self.screen, (30, 36, 46), (gx, 0), (gx, WINDOW_HEIGHT), 1)
-        for gy in range(0, WINDOW_HEIGHT, 50):
-            pygame.draw.line(self.screen, (30, 36, 46), (0, gy), (WINDOW_WIDTH, gy), 1)
+        # 2. Cabin Room Floor (2.0 m x 2.0 m @ 100 px/m)
+        room_rect = pygame.Rect(int(ROOM_X0), int(ROOM_Y0), int(ROOM_SIZE), int(ROOM_SIZE))
+        pygame.draw.rect(self.screen, (45, 38, 32), room_rect) # Warm wooden floor base
 
-        # 2. Trail (Room Discovery path visualization)
+        # Cabin Floor Grid (0.5 m = 50 px grid)
+        for gx in range(int(ROOM_X0), int(ROOM_X0 + ROOM_SIZE) + 1, 50):
+            pygame.draw.line(self.screen, (58, 48, 40), (gx, int(ROOM_Y0)), (gx, int(ROOM_Y0 + ROOM_SIZE)), 1)
+        for gy in range(int(ROOM_Y0), int(ROOM_Y0 + ROOM_SIZE) + 1, 50):
+            pygame.draw.line(self.screen, (58, 48, 40), (int(ROOM_X0), gy), (int(ROOM_X0 + ROOM_SIZE), gy), 1)
+
+        # 3. Cabin Wall Boundaries (Thick wooden border)
+        pygame.draw.rect(self.screen, (180, 130, 80), room_rect, 8)
+        pygame.draw.rect(self.screen, (220, 170, 120), room_rect, 2)
+
+        # 4. Trail (Robot path / coverage visualization)
         if len(self.trail) > 1:
             trail_color = (60, 200, 180) if self.mode == MODE_AUTOMATIC else (60, 130, 180)
             pygame.draw.lines(self.screen, trail_color, False, self.trail, 2)
 
-        # 3. Obstacles
-        for ox, oy, r in self.obstacles:
-            pygame.draw.circle(self.screen, (180, 70, 70), (int(ox), int(oy)), int(r))
-            pygame.draw.circle(self.screen, (230, 100, 100), (int(ox), int(oy)), int(r), 2)
+        # 5. Furniture Visual Rendering (Table Top & Chair Seats)
+        # Chair 1 Seat (Top side)
+        pygame.draw.rect(self.screen, (50, 110, 170), self.chair1_rect, border_radius=3)
+        pygame.draw.rect(self.screen, (90, 160, 220), self.chair1_rect, 1, border_radius=3)
+        pygame.draw.line(self.screen, (120, 190, 240), (self.chair1_rect.left, self.chair1_rect.top), (self.chair1_rect.right, self.chair1_rect.top), 3)
 
-        # 4. Target Waypoint (Active in Mode 3)
+        # Chair 2 Seat (Bottom side, left)
+        pygame.draw.rect(self.screen, (50, 110, 170), self.chair2_rect, border_radius=3)
+        pygame.draw.rect(self.screen, (90, 160, 220), self.chair2_rect, 1, border_radius=3)
+        pygame.draw.line(self.screen, (120, 190, 240), (self.chair2_rect.left, self.chair2_rect.bottom), (self.chair2_rect.right, self.chair2_rect.bottom), 3)
+
+        # Chair 3 Seat (Bottom side, right)
+        pygame.draw.rect(self.screen, (50, 110, 170), self.chair3_rect, border_radius=3)
+        pygame.draw.rect(self.screen, (90, 160, 220), self.chair3_rect, 1, border_radius=3)
+        pygame.draw.line(self.screen, (120, 190, 240), (self.chair3_rect.left, self.chair3_rect.bottom), (self.chair3_rect.right, self.chair3_rect.bottom), 3)
+
+        # Table Top (Center)
+        pygame.draw.rect(self.screen, (150, 85, 40), self.table_rect, border_radius=4)
+        pygame.draw.rect(self.screen, (210, 140, 70), self.table_rect, 2, border_radius=4)
+
+        # 6. Physical Leg Obstacles (Table and Chair Legs rendered distinctly)
+        for ox, oy, r in self.obstacles:
+            pygame.draw.circle(self.screen, (230, 70, 70), (int(ox), int(oy)), int(max(2, r + 1)))
+            pygame.draw.circle(self.screen, (255, 160, 160), (int(ox), int(oy)), 1)
+            pygame.draw.circle(self.screen, (140, 30, 30), (int(ox), int(oy)), int(max(2, r + 1)), 1)
+
+        # 7. Target Waypoint (Active in Mode 3)
         if self.mode == MODE_DESTINATION:
             pulse = 4 * math.sin(time.time() * 6.0)
-            pygame.draw.circle(self.screen, (255, 180, 50), (int(self.target_x), int(self.target_y)), int(12 + pulse), 2)
-            pygame.draw.circle(self.screen, (255, 200, 80), (int(self.target_x), int(self.target_y)), 4)
-            pygame.draw.line(self.screen, (255, 180, 50, 100), 
-                             (int(self.target_x) - 16, int(self.target_y)), (int(self.target_x) + 16, int(self.target_y)), 1)
-            pygame.draw.line(self.screen, (255, 180, 50, 100), 
-                             (int(self.target_x), int(self.target_y) - 16), (int(self.target_x), int(self.target_y) + 16), 1)
+            pygame.draw.circle(self.screen, (255, 180, 50), (int(self.target_x), int(self.target_y)), int(10 + pulse), 2)
+            pygame.draw.circle(self.screen, (255, 200, 80), (int(self.target_x), int(self.target_y)), 3)
 
-        # 5. Distance sensor ray
+        # 8. Distance Sensor Ray
         sensor_end_x = self.x + self.front_dist * math.cos(self.theta)
         sensor_end_y = self.y + self.front_dist * math.sin(self.theta)
         pygame.draw.line(self.screen, (240, 70, 70), (int(self.x), int(self.y)), (int(sensor_end_x), int(sensor_end_y)), 1)
-        pygame.draw.circle(self.screen, (255, 50, 50), (int(sensor_end_x), int(sensor_end_y)), 4)
+        pygame.draw.circle(self.screen, (255, 50, 50), (int(sensor_end_x), int(sensor_end_y)), 3)
 
-        # 6. Robot Body (Cleaning Robot Chassis)
+        # 9. Robot Body (Cleaning Robot Chassis)
         rx, ry = int(self.x), int(self.y)
         pygame.draw.circle(self.screen, (30, 40, 55), (rx, ry), int(ROBOT_RADIUS))
-        pygame.draw.circle(self.screen, (40, 160, 220), (rx, ry), int(ROBOT_RADIUS - 3))
+        pygame.draw.circle(self.screen, (40, 160, 220), (rx, ry), int(ROBOT_RADIUS - 2))
         pygame.draw.circle(self.screen, (200, 240, 255), (rx, ry), int(ROBOT_RADIUS), 2)
 
         # Front Bumper Bar (tactile bumper arc)
         b_ang = 0.75
         p_left = (rx + ROBOT_RADIUS * math.cos(self.theta - b_ang),
                   ry + ROBOT_RADIUS * math.sin(self.theta - b_ang))
-        p_front = (rx + (ROBOT_RADIUS + 4) * math.cos(self.theta),
-                   ry + (ROBOT_RADIUS + 4) * math.sin(self.theta))
+        p_front = (rx + (ROBOT_RADIUS + 3) * math.cos(self.theta),
+                   ry + (ROBOT_RADIUS + 3) * math.sin(self.theta))
         p_right = (rx + ROBOT_RADIUS * math.cos(self.theta + b_ang),
                    ry + ROBOT_RADIUS * math.sin(self.theta + b_ang))
-        pygame.draw.lines(self.screen, (240, 70, 70), False, [p_left, p_front, p_right], 3)
+        pygame.draw.lines(self.screen, (240, 70, 70), False, [p_left, p_front, p_right], 2)
 
         # Center Vacuum Suction Vortex
         vac_color = (0, 240, 255) if self.client.is_vacuum_on else (90, 100, 110)
-        pygame.draw.circle(self.screen, vac_color, (rx, ry), 7)
+        pygame.draw.circle(self.screen, vac_color, (rx, ry), 5)
         if self.client.is_vacuum_on:
-            pygame.draw.circle(self.screen, (255, 255, 255), (rx, ry), 3)
+            pygame.draw.circle(self.screen, (255, 255, 255), (rx, ry), 2)
 
         # Spinning Side Sweeper Brush
         brush_base_ang = self.theta + 0.65
-        bx = rx + (ROBOT_RADIUS - 4) * math.cos(brush_base_ang)
-        by = ry + (ROBOT_RADIUS - 4) * math.sin(brush_base_ang)
+        bx = rx + (ROBOT_RADIUS - 3) * math.cos(brush_base_ang)
+        by = ry + (ROBOT_RADIUS - 3) * math.sin(brush_base_ang)
         spin = (time.time() * 14.0) % (2.0 * math.pi) if self.client.is_vacuum_on else 0.0
         for b_sub in [spin, spin + 2.094, spin + 4.188]:
-            br_end_x = bx + 9 * math.cos(b_sub)
-            br_end_y = by + 9 * math.sin(b_sub)
+            br_end_x = bx + 6 * math.cos(b_sub)
+            br_end_y = by + 6 * math.sin(b_sub)
             pygame.draw.line(self.screen, (255, 220, 70), (bx, by), (br_end_x, br_end_y), 2)
-        pygame.draw.circle(self.screen, (50, 50, 50), (int(bx), int(by)), 3)
 
-        # Wheels
+        # Differential Drive Wheels
         perp = self.theta + math.pi / 2.0
         w_offset = WHEEL_BASE / 2.0
         for side in [-1, 1]:
             wx = self.x + side * w_offset * math.cos(perp)
             wy = self.y + side * w_offset * math.sin(perp)
-            # Wheel rectangle aligned with heading
-            w_len, w_th = 16, 6
+            w_len, w_th = 10, 4
             p1 = (wx - (w_len/2)*math.cos(self.theta) - (w_th/2)*math.sin(self.theta),
                   wy - (w_len/2)*math.sin(self.theta) + (w_th/2)*math.cos(self.theta))
             p2 = (wx + (w_len/2)*math.cos(self.theta) - (w_th/2)*math.sin(self.theta),
@@ -460,12 +543,12 @@ class RobotSimulation:
             pygame.draw.polygon(self.screen, (20, 20, 20), [p1, p2, p3, p4])
             pygame.draw.polygon(self.screen, (100, 100, 100), [p1, p2, p3, p4], 1)
 
-        # Heading indicator arrow
-        head_x = self.x + (ROBOT_RADIUS + 8) * math.cos(self.theta)
-        head_y = self.y + (ROBOT_RADIUS + 8) * math.sin(self.theta)
-        pygame.draw.line(self.screen, (255, 255, 100), (rx, ry), (int(head_x), int(head_y)), 3)
+        # Heading Indicator Line
+        head_x = self.x + (ROBOT_RADIUS + 6) * math.cos(self.theta)
+        head_y = self.y + (ROBOT_RADIUS + 6) * math.sin(self.theta)
+        pygame.draw.line(self.screen, (255, 255, 100), (rx, ry), (int(head_x), int(head_y)), 2)
 
-        # 7. Telemetry & Status HUD Overlay
+        # 10. Status HUD Overlay
         self._render_hud()
 
         pygame.display.flip()
@@ -493,21 +576,23 @@ class RobotSimulation:
             MODE_DESTINATION: (255, 180, 50)
         }
 
+        # Cabin relative coordinates (0 to 2.0 m)
+        rel_x_m = (self.x - ROOM_X0) / SCALE_PX_PER_M
+        rel_y_m = (self.y - ROOM_Y0) / SCALE_PX_PER_M
+
         lines = [
-            ("CLEANING ROBOT HIL SIMULATOR", (255, 255, 255), self.font_title),
+            ("2.0m x 2.0m CABIN ROBOT SIMULATOR", (255, 255, 255), self.font_title),
             (mode_titles[self.mode], mode_colors[self.mode], self.font_bold),
             (f"Status: {self.client.status_msg}", badge_color, self.font_bold),
-            (f"Cleaning: {vac_txt}", vac_color, self.font_small),
-            (f"FPS: {self.clock.get_fps():.1f} | Telemetry Pkts: {self.client.packet_count}", (180, 190, 200), self.font_small),
-            (f"Robot Pose : X={self.x:.1f}, Y={self.y:.1f}, Th={math.degrees(self.theta):.1f}°", (200, 220, 240), self.font_small),
-            (f"Target Waypoint: X={self.target_x:.1f}, Y={self.target_y:.1f}", (240, 220, 120), self.font_small),
-            (f"Front Sensor   : {self.front_dist:.1f} px", (250, 140, 140), self.font_small),
+            (f"Environment: 2.0m x 2.0m Cabin (100 px = 1 m)", (220, 220, 180), self.font_small),
+            (f"Robot Cabin Pose: X={rel_x_m:.2f}m, Y={rel_y_m:.2f}m, Th={math.degrees(self.theta):.1f}°", (200, 220, 240), self.font_small),
+            (f"Front Sensor   : {self.front_dist:.1f} px ({self.front_dist/SCALE_PX_PER_M:.2f} m)", (250, 140, 140), self.font_small),
             (f"Motor Cmds (L/R): {self.v_l:.1f} / {self.v_r:.1f}", (140, 240, 160), self.font_bold),
             ("Modes: Press [1] Manual | [2] Auto | [3] Destination", (255, 255, 180), self.font_bold),
             ("Manual Mode: Use W A S D keys to drive robot", (160, 200, 240), self.font_small),
         ]
 
-        y_offset = 20
+        y_offset = 18
         for text, color, font in lines:
             rendered = font.render(text, True, color)
             self.screen.blit(rendered, (25, y_offset))
@@ -531,8 +616,6 @@ class RobotSimulation:
                             if event.button == 1:  # Left click: Set target
                                 self.target_x = float(mx)
                                 self.target_y = float(my)
-                            elif event.button == 3:  # Right click: Add obstacle
-                                self.obstacles.append((float(mx), float(my), 25.0))
                         elif event.type == pygame.KEYDOWN:
                             if event.key in (pygame.K_1, pygame.K_KP1):
                                 self.mode = MODE_MANUAL
@@ -546,16 +629,11 @@ class RobotSimulation:
                                 self.mode = MODE_DESTINATION
                                 self.client.set_mode(MODE_DESTINATION)
                                 print("[MODE SWITCH] Switched to Mode 3: Destination Mode")
-                            elif event.key == pygame.K_r:  # Reset
-                                self.x = 200.0
-                                self.y = 350.0
+                            elif event.key == pygame.K_r:  # Reset robot position to open start area
+                                self.x = ROOM_X0 + 35.0
+                                self.y = ROOM_Y0 + 35.0
                                 self.theta = 0.0
                                 self.trail.clear()
-                            elif event.key == pygame.K_o:  # Add obstacle at mouse
-                                mx, my = pygame.mouse.get_pos()
-                                self.obstacles.append((float(mx), float(my), 25.0))
-                            elif event.key == pygame.K_c:  # Clear obstacles
-                                self.obstacles.clear()
 
                 self.step_physics(SIM_DT)
 
